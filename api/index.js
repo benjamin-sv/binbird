@@ -17,13 +17,14 @@ const {
   GetItemCommand,
   PutItemCommand,
   DeleteItemCommand,
+  UpdateItemCommand,
   BatchGetItemCommand,
   BatchWriteItemCommand
 } = require("@aws-sdk/client-dynamodb");
 const {
-  LambdaClient,
-  InvokeCommand
-} = require("@aws-sdk/client-lambda");
+  SQSClient,
+  SendMessageBatchCommand
+} = require("@aws-sdk/client-sqs");
 
 const REGION = process.env.AWS_REGION || "ap-southeast-2";
 const DATA_BUCKET = process.env.DATA_BUCKET || "bird-detection-data";
@@ -39,12 +40,13 @@ const CROP_WORKER_MAX_GROUPS = Number(process.env.CROP_WORKER_MAX_GROUPS || "40"
 const CROP_WORKER_MAX_DETECTIONS = Number(process.env.CROP_WORKER_MAX_DETECTIONS || "8000");
 const CROP_WORKER_MAX_MILLIS = Number(process.env.CROP_WORKER_MAX_MILLIS || "720000");
 const CROP_UPLOAD_CONCURRENCY = Number(process.env.CROP_UPLOAD_CONCURRENCY || "8");
-const REVIEW_FUNCTION_NAME = process.env.REVIEW_FUNCTION_NAME || process.env.AWS_LAMBDA_FUNCTION_NAME;
+const CROP_SHARD_GROUPS = Number(process.env.CROP_SHARD_GROUPS || "10");
+const CROP_QUEUE_URL = process.env.CROP_QUEUE_URL || "";
 const NO_SUBCATEGORY = "__none__";
 
 const s3 = new S3Client({ region: REGION });
 const dynamo = new DynamoDBClient({ region: REGION });
-const lambda = new LambdaClient({ region: REGION });
+const sqs = new SQSClient({ region: REGION });
 
 const config = JSON.parse(fs.readFileSync(path.join(__dirname, "config.json"), "utf8"));
 const categoriesByKey = new Map((config.categories || []).map((item) => [item.key, item]));
@@ -56,6 +58,13 @@ const sourceImageCache = new Map();
 
 exports.handler = async (event) => {
   try {
+    if (Array.isArray(event?.Records) && event.Records[0]?.eventSource === "aws:sqs") {
+      for (const record of event.Records) {
+        await handleCropWorker(JSON.parse(record.body));
+      }
+      return { batchItemFailures: [] };
+    }
+
     if (event?.worker === "crop-generation") {
       return await handleCropWorker(event);
     }
@@ -608,7 +617,10 @@ function summaryWithCropStatus(summary, status) {
 
 async function ensureCropGenerationStarted(jobId, index) {
   const existing = await getCropStatus(jobId);
-  if (existing?.status === "running" || existing?.status === "complete") {
+  if (existing?.status === "complete") {
+    return existing;
+  }
+  if (existing?.status === "running" && !isCropStatusStale(existing)) {
     return existing;
   }
   return startCropGeneration(jobId, index, false);
@@ -616,32 +628,47 @@ async function ensureCropGenerationStarted(jobId, index) {
 
 async function startCropGeneration(jobId, index, force) {
   const existing = await getCropStatus(jobId);
-  if (!force && (existing?.status === "running" || existing?.status === "complete")) {
+  if (!force && existing?.status === "complete") {
+    return existing;
+  }
+  if (!force && existing?.status === "running" && !isCropStatusStale(existing)) {
     return existing;
   }
   const manifest = await getCropManifest(jobId, index);
   const now = new Date().toISOString();
+  const startGroupIndex = existing?.version === CROP_CACHE_VERSION
+    ? clampInt(existing.next_group_index, 0, 0, manifest.groups.length)
+    : 0;
+  const initialGenerated = existing?.version === CROP_CACHE_VERSION
+    ? clampInt(existing.generated, 0, 0, index.summary.total)
+    : 0;
+  const shards = cropWorkerShards(startGroupIndex, manifest.groups.length);
   const status = {
     status: "running",
     run_id: crypto.randomUUID(),
     version: CROP_CACHE_VERSION,
     total: index.summary.total,
     total_groups: manifest.groups.length,
-    generated: 0,
-    next_group_index: 0,
+    total_shards: shards.length,
+    completed_shards: 0,
+    generated: initialGenerated,
+    next_group_index: startGroupIndex,
     started_at: now,
     updated_at: now,
-    message: "Crop generation started."
+    message: shards.length
+      ? `Queued ${shards.length} crop worker shards.`
+      : "All crop groups have already been queued."
   };
   await putCropStatus(jobId, status);
-  await invokeCropWorker(jobId, status.run_id, 0);
+  await enqueueCropWorkerShards(jobId, status.run_id, shards);
   return status;
 }
 
 async function handleCropWorker(event) {
   const jobId = event.job_id;
   const runId = event.run_id;
-  let groupIndex = Number(event.group_index || 0);
+  let groupIndex = Number(event.start_group_index ?? event.group_index ?? 0);
+  const endGroupIndex = Number(event.end_group_index ?? groupIndex + CROP_SHARD_GROUPS);
   if (!jobId || !runId) {
     throw new Error("Crop worker requires job_id and run_id.");
   }
@@ -649,7 +676,6 @@ async function handleCropWorker(event) {
   if (!status || status.run_id !== runId || status.status !== "running") {
     return { ignored: true, reason: "stale crop worker event" };
   }
-  groupIndex = Math.max(groupIndex, Number(status.next_group_index || 0));
   const started = Date.now();
   const index = await getJobIndex(jobId);
   const manifest = await getCropManifest(jobId, index);
@@ -657,7 +683,7 @@ async function handleCropWorker(event) {
   let groupsDone = 0;
   let detectionsDone = 0;
   try {
-    while (groupIndex < manifest.groups.length) {
+    while (groupIndex < Math.min(endGroupIndex, manifest.groups.length)) {
       const group = manifest.groups[groupIndex];
       const records = index.detections
         .slice(group.start, group.end)
@@ -675,32 +701,7 @@ async function handleCropWorker(event) {
         break;
       }
     }
-    const now = new Date().toISOString();
-    if (groupIndex >= manifest.groups.length) {
-      const complete = {
-        ...status,
-        status: "complete",
-        generated: index.summary.total,
-        next_group_index: manifest.groups.length,
-        total_groups: manifest.groups.length,
-        updated_at: now,
-        completed_at: now,
-        message: "All crops generated."
-      };
-      await putCropStatus(jobId, complete);
-      return complete;
-    }
-    const running = {
-      ...status,
-      generated,
-      next_group_index: groupIndex,
-      total_groups: manifest.groups.length,
-      updated_at: now,
-      message: `Generated ${generated} of ${index.summary.total} crops.`
-    };
-    await putCropStatus(jobId, running);
-    await invokeCropWorker(jobId, runId, groupIndex);
-    return running;
+    return await addCropProgress(jobId, runId, detectionsDone, groupIndex, index.summary.total);
   } catch (error) {
     console.error(error);
     const failed = {
@@ -802,20 +803,36 @@ function stripGroupKey(group) {
   return rest;
 }
 
-async function invokeCropWorker(jobId, runId, groupIndex) {
-  if (!REVIEW_FUNCTION_NAME) {
-    throw httpError(500, "Lambda function name is not configured for crop generation.", "WORKER_NOT_CONFIGURED");
+function cropWorkerShards(startGroupIndex, totalGroups) {
+  const shards = [];
+  const shardSize = Math.max(1, CROP_SHARD_GROUPS);
+  for (let start = startGroupIndex; start < totalGroups; start += shardSize) {
+    shards.push({
+      start_group_index: start,
+      end_group_index: Math.min(start + shardSize, totalGroups)
+    });
   }
-  await lambda.send(new InvokeCommand({
-    FunctionName: REVIEW_FUNCTION_NAME,
-    InvocationType: "Event",
-    Payload: Buffer.from(JSON.stringify({
-      worker: "crop-generation",
-      job_id: jobId,
-      run_id: runId,
-      group_index: groupIndex
-    }))
-  }));
+  return shards;
+}
+
+async function enqueueCropWorkerShards(jobId, runId, shards) {
+  if (!CROP_QUEUE_URL && shards.length) {
+    throw httpError(500, "Crop worker queue is not configured.", "WORKER_QUEUE_NOT_CONFIGURED");
+  }
+  for (const chunk of chunks(shards, 10)) {
+    await sqs.send(new SendMessageBatchCommand({
+      QueueUrl: CROP_QUEUE_URL,
+      Entries: chunk.map((shard, index) => ({
+        Id: `${shard.start_group_index}-${index}`,
+        MessageBody: JSON.stringify({
+          worker: "crop-generation",
+          job_id: jobId,
+          run_id: runId,
+          ...shard
+        })
+      }))
+    }));
+  }
 }
 
 async function getCropStatus(jobId) {
@@ -823,7 +840,22 @@ async function getCropStatus(jobId) {
     TableName: PROGRESS_TABLE,
     Key: { pk: { S: jobPk(jobId) }, sk: { S: cropStatusSk() } }
   }));
-  return response.Item?.status_json?.S ? JSON.parse(response.Item.status_json.S) : null;
+  if (!response.Item?.status_json?.S) {
+    return null;
+  }
+  const status = JSON.parse(response.Item.status_json.S);
+  const generated = numberAttr(response.Item.generated_count, status.generated || 0);
+  const completedShards = numberAttr(response.Item.completed_shards, status.completed_shards || 0);
+  const totalShards = numberAttr(response.Item.total_shards, status.total_shards || 0);
+  const nextGroupIndex = numberAttr(response.Item.next_group_index, status.next_group_index || 0);
+  return {
+    ...status,
+    generated,
+    completed_shards: completedShards,
+    total_shards: totalShards,
+    next_group_index: nextGroupIndex,
+    updated_at: response.Item.updated_at?.S || status.updated_at
+  };
 }
 
 async function putCropStatus(jobId, status) {
@@ -833,10 +865,70 @@ async function putCropStatus(jobId, status) {
       pk: { S: jobPk(jobId) },
       sk: { S: cropStatusSk() },
       status_json: { S: JSON.stringify(status) },
+      run_id: { S: status.run_id || "" },
       status: { S: status.status },
+      generated_count: { N: String(status.generated || 0) },
+      completed_shards: { N: String(status.completed_shards || 0) },
+      total_shards: { N: String(status.total_shards || 0) },
+      next_group_index: { N: String(status.next_group_index || 0) },
       updated_at: { S: status.updated_at || new Date().toISOString() }
     }
   }));
+}
+
+async function addCropProgress(jobId, runId, generatedDelta, nextGroupIndex, total) {
+  const now = new Date().toISOString();
+  const response = await dynamo.send(new UpdateItemCommand({
+    TableName: PROGRESS_TABLE,
+    Key: { pk: { S: jobPk(jobId) }, sk: { S: cropStatusSk() } },
+    ConditionExpression: "run_id = :run_id OR attribute_not_exists(run_id)",
+    UpdateExpression: "ADD generated_count :generated, completed_shards :one SET updated_at = :updated_at, next_group_index = :next_group_index",
+    ExpressionAttributeValues: {
+      ":run_id": { S: runId },
+      ":generated": { N: String(generatedDelta || 0) },
+      ":one": { N: "1" },
+      ":updated_at": { S: now },
+      ":next_group_index": { N: String(nextGroupIndex || 0) }
+    },
+    ReturnValues: "ALL_NEW"
+  }));
+  const status = response.Attributes?.status_json?.S ? JSON.parse(response.Attributes.status_json.S) : {};
+  const generated = numberAttr(response.Attributes?.generated_count, status.generated || 0);
+  const completedShards = numberAttr(response.Attributes?.completed_shards, status.completed_shards || 0);
+  const totalShards = numberAttr(response.Attributes?.total_shards, status.total_shards || 0);
+  if (totalShards && completedShards >= totalShards) {
+    const complete = {
+      ...status,
+      status: "complete",
+      generated: total,
+      completed_shards: completedShards,
+      total_shards: totalShards,
+      next_group_index: status.total_groups || nextGroupIndex,
+      updated_at: now,
+      completed_at: now,
+      message: "All crops generated."
+    };
+    await putCropStatus(jobId, complete);
+    return complete;
+  }
+  const running = {
+    ...status,
+    generated,
+    completed_shards: completedShards,
+    total_shards: totalShards,
+    next_group_index: nextGroupIndex,
+    updated_at: now,
+    message: `Generated ${generated} of ${total} crops.`
+  };
+  await dynamo.send(new UpdateItemCommand({
+    TableName: PROGRESS_TABLE,
+    Key: { pk: { S: jobPk(jobId) }, sk: { S: cropStatusSk() } },
+    UpdateExpression: "SET status_json = :status_json",
+    ExpressionAttributeValues: {
+      ":status_json": { S: JSON.stringify(running) }
+    }
+  }));
+  return running;
 }
 
 function publicCropStatus(status, total) {
@@ -857,6 +949,8 @@ function publicCropStatus(status, total) {
     generated,
     missing: cropMissingCount(status, total),
     total_groups: Number(status.total_groups || 0),
+    total_shards: Number(status.total_shards || 0),
+    completed_shards: Number(status.completed_shards || 0),
     next_group_index: Number(status.next_group_index || 0),
     updated_at: status.updated_at || null,
     completed_at: status.completed_at || null,
@@ -869,6 +963,13 @@ function cropMissingCount(status, total) {
     return 0;
   }
   return Math.max(0, Number(total || 0) - Number(status?.generated || 0));
+}
+
+function isCropStatusStale(status) {
+  if (status?.status !== "running" || !status.updated_at) {
+    return false;
+  }
+  return Date.now() - Date.parse(status.updated_at) > 10 * 60 * 1000;
 }
 
 async function handleImage(event) {
@@ -1273,6 +1374,14 @@ function clampInt(value, fallback, min, max) {
 
 function clamp(value, min, max) {
   return Math.max(min, Math.min(max, value));
+}
+
+function numberAttr(attribute, fallback = 0) {
+  if (!attribute?.N) {
+    return fallback;
+  }
+  const value = Number(attribute.N);
+  return Number.isFinite(value) ? value : fallback;
 }
 
 function cropRegionFromYxBox(bbox, width, height) {

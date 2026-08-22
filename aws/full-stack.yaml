@@ -159,6 +159,12 @@ Resources:
         - AttributeName: sk
           KeyType: RANGE
 
+  CropQueue:
+    Type: AWS::SQS::Queue
+    Properties:
+      VisibilityTimeout: 960
+      MessageRetentionPeriod: 86400
+
   ReviewFunctionRole:
     Type: AWS::IAM::Role
     Properties:
@@ -200,11 +206,17 @@ Resources:
                   - dynamodb:GetItem
                   - dynamodb:PutItem
                   - dynamodb:Query
+                  - dynamodb:UpdateItem
                 Resource: !GetAtt ProgressTable.Arn
               - Effect: Allow
                 Action:
-                  - lambda:InvokeFunction
-                Resource: !Sub "arn:aws:lambda:${AWS::Region}:${AWS::AccountId}:function:${AWS::StackName}-ReviewFunction-*"
+                  - sqs:SendMessage
+                  - sqs:SendMessageBatch
+                  - sqs:ReceiveMessage
+                  - sqs:DeleteMessage
+                  - sqs:GetQueueAttributes
+                  - sqs:ChangeMessageVisibility
+                Resource: !GetAtt CropQueue.Arn
 
   ReviewFunction:
     Type: AWS::Lambda::Function
@@ -235,6 +247,18 @@ Resources:
           CROP_WORKER_MAX_DETECTIONS: "8000"
           CROP_WORKER_MAX_MILLIS: "720000"
           CROP_UPLOAD_CONCURRENCY: "8"
+          CROP_SHARD_GROUPS: "10"
+          CROP_QUEUE_URL: !Ref CropQueue
+
+  CropQueueMapping:
+    Type: AWS::Lambda::EventSourceMapping
+    Properties:
+      EventSourceArn: !GetAtt CropQueue.Arn
+      FunctionName: !Ref ReviewFunction
+      BatchSize: 1
+      Enabled: true
+      ScalingConfig:
+        MaximumConcurrency: 20
 
   ReviewFunctionUrl:
     Type: AWS::Lambda::Url

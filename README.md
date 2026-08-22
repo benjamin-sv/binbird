@@ -16,6 +16,7 @@ Progress is shared per job. There are no separate reviewer queues in the current
 Browser
   -> CloudFront + private S3 bucket for static files
   -> Lambda Function URL API
+  -> SQS crop worker queue
   -> private S3 detection data and cached crops
   -> DynamoDB shared progress table
 ```
@@ -44,7 +45,7 @@ detections/<job>/review/summary.json
 detections/<job>/review/crops-yx-v1/<detection_id>.jpg
 ```
 
-When a job is opened, the API starts a background whole-job crop generator if the current crop cache is missing. The worker groups detections by source image, decodes each source image once, writes all crops for that image, and chains itself until the job is complete. Image requests only redirect to existing generated crops; they do not crop on demand.
+When a job is opened, the API starts a background whole-job crop generator if the current crop cache is missing. The worker groups detections by source image, decodes each source image once, writes all crops for that image, and uses SQS shards so multiple Lambda invocations can process the job in parallel. Image requests only redirect to existing generated crops; they do not crop on demand.
 
 ## Detection Result Formats
 
@@ -82,6 +83,7 @@ It creates:
 - private static-site S3 bucket
 - CloudFront distribution
 - Lambda review API with Function URL
+- SQS queue for parallel crop generation
 - DynamoDB on-demand progress table
 - IAM role for private S3/DynamoDB access
 

@@ -30,7 +30,7 @@ s3://bird-detection-data/detections/DCCEEW-2026-08-10/
 s3://bird-detection-data/detections/DCCEEW-2026-08-11/
 ```
 
-Both current jobs were observed with `exportCrops: false`, so the review API generates and caches crops with a background whole-job worker.
+Both current jobs were observed with `exportCrops: false`, so the review API generates and caches crops with background SQS crop-worker shards.
 
 ## Deployed Stack
 
@@ -46,6 +46,7 @@ Resources:
 CloudFront + private S3 bucket: static HTML/CSS/JS
 Lambda Function URL: review API
 Lambda: job parsing, crop generation, progress writes
+SQS: parallel crop shard queue
 DynamoDB on-demand: shared selected/reviewed state
 S3: detection results, cached review indexes, cached crops
 ```
@@ -64,7 +65,7 @@ browser -> Lambda Function URL -> S3/DynamoDB
 
 The browser calls the Lambda API with a shared access key. Lambda validates the key, then uses its IAM role to read `bird-detection-data`, write cached review artifacts, and update DynamoDB.
 
-Images are not exposed as public S3 objects. The app receives short-lived signed API URLs. The image endpoint validates the signature and redirects to a short-lived S3 URL for an existing crop. It does not crop on demand. Opening a job starts the background crop worker if the current cache is missing. The current exporter writes bbox values as `y,x,Y,X`, so crop generation treats the final four detection fields as row/column coordinates.
+Images are not exposed as public S3 objects. The app receives short-lived signed API URLs. The image endpoint validates the signature and redirects to a short-lived S3 URL for an existing crop. It does not crop on demand. Opening a job starts the background crop worker if the current cache is missing. The worker queues SQS shards, and each shard processes a range of source-image groups so source images are decoded once per group while multiple Lambda invocations run in parallel. The current exporter writes bbox values as `y,x,Y,X`, so crop generation treats the final four detection fields as row/column coordinates.
 
 This is acceptable for the current collaborative prototype. For stronger user-level identity later, replace the shared access key with Cognito, IAM Identity Center, or another identity provider.
 
@@ -105,10 +106,12 @@ GET  /api/detections?job_id=<job>&category_id=<id>&subcategory=<filter>&offset=<
 GET  /api/detection_ids?job_id=<job>&category_id=<id>&subcategory=<filter>
 GET  /api/detection?id=<job/detection-id>
 GET  /api/image?job_id=<job>&id=<job/detection-id>&expires=<unix>&sig=<hmac>
+GET  /api/crops/status?job_id=<job>
 POST /api/detections/by-id
 POST /api/progress/selection
 POST /api/progress/review
 POST /api/progress/undo
+POST /api/crops/start
 ```
 
 Errors are returned as JSON:
