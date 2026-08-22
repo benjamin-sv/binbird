@@ -1,0 +1,5 @@
+__pycache__/
+*.pyc
+*.log
+review_progress.json
+.deploy/

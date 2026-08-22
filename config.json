@@ -1,0 +1,226 @@
+{
+  "project_name": "Prediction Review",
+  "progress_file": "review_progress.json",
+  "image_extensions": [".jpg", ".jpeg", ".png", ".webp"],
+  "categories": [
+    {
+      "id": 1,
+      "key": "birds_boobies",
+      "label": "Boobies",
+      "shortcut": "1",
+      "requires_subcategory": true
+    },
+    {
+      "id": 2,
+      "key": "birds_frigatebird",
+      "label": "Frigatebirds",
+      "shortcut": "2",
+      "requires_subcategory": true
+    },
+    {
+      "id": 3,
+      "key": "bird_ambiguous",
+      "label": "Ambiguous birds and gulls",
+      "shortcut": "3",
+      "requires_subcategory": true
+    },
+    {
+      "id": 4,
+      "key": "birds_terns",
+      "label": "Terns and noddies",
+      "shortcut": "4",
+      "requires_subcategory": true
+    },
+    {
+      "id": 5,
+      "key": "birds_shearwaters",
+      "label": "Shearwaters and petrels",
+      "shortcut": "5",
+      "requires_subcategory": true
+    },
+    {
+      "id": 6,
+      "key": "birds_tropicbird",
+      "label": "Tropicbirds",
+      "shortcut": "6",
+      "requires_subcategory": true
+    },
+    {
+      "id": 7,
+      "key": "birds_waders",
+      "label": "Waders",
+      "shortcut": "7",
+      "requires_subcategory": true
+    },
+    {
+      "id": 0,
+      "key": "nothing",
+      "label": "Nothing / false detection",
+      "shortcut": "8",
+      "requires_subcategory": false,
+      "is_false_detection": true
+    }
+  ],
+  "subcategories": [
+    {
+      "id": "unsure",
+      "name": "Unsure",
+      "category_id": -1,
+      "special": true
+    },
+    {
+      "id": 0,
+      "name": "Ambiguous",
+      "category_id": -1
+    },
+    {
+      "id": 1,
+      "name": "Brown booby",
+      "category_id": 1
+    },
+    {
+      "id": 2,
+      "name": "Great frigatebird",
+      "category_id": 2
+    },
+    {
+      "id": 3,
+      "name": "Common noddy",
+      "category_id": 4
+    },
+    {
+      "id": 4,
+      "name": "Black noddy",
+      "category_id": 4
+    },
+    {
+      "id": 5,
+      "name": "Masked booby",
+      "category_id": 1
+    },
+    {
+      "id": 6,
+      "name": "Wedge-tailed shearwater",
+      "category_id": 5
+    },
+    {
+      "id": 7,
+      "name": "Sooty tern",
+      "category_id": 4
+    },
+    {
+      "id": 8,
+      "name": "Lesser frigatebird",
+      "category_id": 2
+    },
+    {
+      "id": 9,
+      "name": "Red-footed booby",
+      "category_id": 1
+    },
+    {
+      "id": 10,
+      "name": "Caspian tern",
+      "category_id": 4
+    },
+    {
+      "id": 11,
+      "name": "Red-tailed tropicbird",
+      "category_id": 6
+    },
+    {
+      "id": 12,
+      "name": "Medium dark tern",
+      "category_id": 4
+    },
+    {
+      "id": 13,
+      "name": "Crested tern",
+      "category_id": 4
+    },
+    {
+      "id": 14,
+      "name": "Whimbrel",
+      "category_id": 7
+    },
+    {
+      "id": 15,
+      "name": "Black-naped tern",
+      "category_id": 4
+    },
+    {
+      "id": 16,
+      "name": "Pied oystercatcher",
+      "category_id": 7
+    },
+    {
+      "id": 17,
+      "name": "Unknown tern species",
+      "category_id": 4
+    },
+    {
+      "id": 18,
+      "name": "Ruddy turnstone",
+      "category_id": 7
+    },
+    {
+      "id": 19,
+      "name": "Fairy tern",
+      "category_id": 4
+    },
+    {
+      "id": 20,
+      "name": "Silver gull",
+      "category_id": 3
+    },
+    {
+      "id": 21,
+      "name": "Lesser crested tern",
+      "category_id": 4
+    },
+    {
+      "id": 22,
+      "name": "Herald petrel",
+      "category_id": 5
+    },
+    {
+      "id": 23,
+      "name": "Australian tern",
+      "category_id": 4
+    },
+    {
+      "id": 24,
+      "name": "Greater crested tern",
+      "category_id": 4
+    },
+    {
+      "id": 25,
+      "name": "Bridled tern",
+      "category_id": 4
+    },
+    {
+      "id": 26,
+      "name": "Tahiti petrel",
+      "category_id": 5
+    },
+    {
+      "id": 27,
+      "name": "Small terns",
+      "category_id": 4
+    }
+  ],
+  "source_label_overrides": {
+    "birds_noddies": {
+      "category_id": 4,
+      "label": "Noddies",
+      "predicted_subcategory_key": "detector_noddies",
+      "predicted_subcategory_label": "Noddies detector label"
+    },
+    "birds_gulls": {
+      "category_id": 3,
+      "label": "Gulls",
+      "predicted_subcategory_id": 20,
+      "predicted_subcategory_label": "Silver gull"
+    }
+  }
+}

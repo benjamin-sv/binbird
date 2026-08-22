@@ -1,0 +1,108 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title>Prediction Review</title>
+    <link rel="stylesheet" href="/static/styles.css">
+  </head>
+  <body>
+    <div class="app-shell">
+      <header class="topbar">
+        <div class="brand-block">
+          <div class="eyebrow">S3 review workspace</div>
+          <h1 id="appTitle">Prediction Review</h1>
+          <div id="datasetMeta" class="dataset-meta"></div>
+        </div>
+        <div class="phase-tabs" role="tablist" aria-label="Review phases">
+          <button id="jobsTab" class="phase-tab is-active" type="button" data-phase="jobs">Jobs</button>
+          <button id="phaseOneTab" class="phase-tab" type="button" data-phase="phase1" disabled>Phase 1</button>
+          <button id="phaseTwoTab" class="phase-tab" type="button" data-phase="phase2" disabled>Phase 2</button>
+        </div>
+      </header>
+
+      <main>
+        <div id="errorBanner" class="error-banner is-hidden"></div>
+
+        <section id="jobScreen" class="phase-panel">
+          <div class="job-panel">
+            <div class="panel-heading">
+              <h2>Select Job</h2>
+              <span id="jobCount" class="muted"></span>
+            </div>
+            <div class="access-row">
+              <label class="access-field" for="accessKeyInput">
+                Access Key
+                <input id="accessKeyInput" type="password" autocomplete="off" spellcheck="false">
+              </label>
+              <span id="accessKeyStatus" class="muted"></span>
+            </div>
+            <div id="jobList" class="job-grid"></div>
+          </div>
+        </section>
+
+        <section id="phase1" class="phase-panel is-hidden">
+          <div class="workspace-grid">
+            <aside class="side-panel">
+              <div class="panel-heading">
+                <h2>Category</h2>
+                <span id="categoryCount" class="muted"></span>
+              </div>
+              <div id="categoryList" class="category-list"></div>
+            </aside>
+
+            <section class="review-list-panel">
+              <div class="toolbar">
+                <label class="field-label" for="subcategoryFilter">Subcategory</label>
+                <select id="subcategoryFilter"></select>
+                <button id="selectAllButton" class="button secondary" type="button">Select all filtered</button>
+                <button id="clearAllButton" class="button secondary" type="button">Clear filtered</button>
+                <button id="startReviewButton" class="button primary" type="button">Review selected</button>
+              </div>
+
+              <div class="status-line">
+                <span id="filterSummary"></span>
+                <span id="saveStatus" class="muted"></span>
+              </div>
+
+              <div id="thumbGrid" class="thumb-grid" aria-live="polite"></div>
+              <div id="gridSentinel" class="grid-sentinel">Loading</div>
+            </section>
+          </div>
+        </section>
+
+        <section id="phase2" class="phase-panel is-hidden">
+          <div class="review-stage">
+            <section class="image-stage">
+              <div class="stage-toolbar">
+                <button id="previousButton" class="button secondary" type="button">Previous</button>
+                <div id="queueStatus" class="queue-status"></div>
+                <button id="undoButton" class="button secondary" type="button">Undo last</button>
+              </div>
+              <div class="large-image-frame">
+                <img id="largeImage" alt="">
+                <div id="largeImageMessage" class="large-image-message is-hidden"></div>
+              </div>
+              <div id="currentMeta" class="current-meta"></div>
+            </section>
+
+            <aside class="correction-panel">
+              <div class="panel-heading">
+                <h2>Correct label</h2>
+                <button id="exportButton" class="button secondary small" type="button">Export JSON</button>
+              </div>
+              <div id="categoryButtons" class="choice-grid category-choice-grid"></div>
+              <div id="subcategoryBlock" class="subcategory-block">
+                <div class="choice-heading">Subcategory</div>
+                <div id="subcategoryButtons" class="choice-grid"></div>
+              </div>
+            </aside>
+          </div>
+        </section>
+      </main>
+    </div>
+
+    <script src="/static/config.js"></script>
+    <script src="/static/app.js"></script>
+  </body>
+</html>
