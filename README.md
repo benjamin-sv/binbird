@@ -62,13 +62,13 @@ The source image path may be an `s3://bucket/key` URL or a key in the configured
 
 ## Configuration
 
-Labels, shortcuts, subcategories, and legacy source-label mappings live in:
+Job type category sets, shortcuts, bird subcategories, and legacy source-label mappings live in:
 
 ```text
 config.json
 ```
 
-Unknown job categories are handled dynamically. If a job has no subcategory column, those dynamic categories do not require subcategory selection. The configured `Nothing / false detection` category is always available in Phase 2.
+The API detects the job type while parsing `detection_results.txt`. Rows with bird category labels or a predicted subcategory are treated as `birds`; rows with rubbish class labels are treated as `rubbish`. Rubbish jobs use the configured rubbish classes and do not require subcategory selection. Unknown job categories are still handled dynamically. The configured `Nothing / false detection` category is always available in Phase 2.
 
 ## Deployment
 

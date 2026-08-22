@@ -35,6 +35,7 @@ const IMAGE_URL_SECRET = process.env.IMAGE_URL_SECRET || ACCESS_KEY || "dev-secr
 const CORS_ORIGIN = process.env.CORS_ORIGIN || "*";
 const IMAGE_URL_SECONDS = Number(process.env.IMAGE_URL_SECONDS || "3600");
 const S3_IMAGE_URL_SECONDS = Number(process.env.S3_IMAGE_URL_SECONDS || "3600");
+const INDEX_VERSION = 2;
 const CROP_CACHE_VERSION = "yx-v1";
 const CROP_WORKER_MAX_GROUPS = Number(process.env.CROP_WORKER_MAX_GROUPS || "40");
 const CROP_WORKER_MAX_DETECTIONS = Number(process.env.CROP_WORKER_MAX_DETECTIONS || "8000");
@@ -49,10 +50,25 @@ const dynamo = new DynamoDBClient({ region: REGION });
 const sqs = new SQSClient({ region: REGION });
 
 const config = JSON.parse(fs.readFileSync(path.join(__dirname, "config.json"), "utf8"));
-const categoriesByKey = new Map((config.categories || []).map((item) => [item.key, item]));
-const categoriesById = new Map((config.categories || []).map((item) => [String(item.id), item]));
+const configuredCategorySets = normalizeCategorySets(config);
+const falseDetectionCategory = normalizeCategory(
+  config.false_detection_category
+    || (config.categories || []).find((item) => item.is_false_detection)
+    || {
+      id: 0,
+      key: "nothing",
+      label: "Nothing / false detection",
+      shortcut: "N",
+      requires_subcategory: false,
+      is_false_detection: true
+    }
+);
+const allConfiguredCategories = configuredCategoriesList(configuredCategorySets, falseDetectionCategory);
+const categoriesByKey = new Map(allConfiguredCategories.map((item) => [item.key, item]));
+const categoriesById = new Map(allConfiguredCategories.map((item) => [String(item.id), item]));
 const subcategoriesById = new Map((config.subcategories || []).map((item) => [String(item.id), item]));
 const sourceLabelOverrides = config.source_label_overrides || {};
+const categoryLookupCache = new Map();
 const indexCache = new Map();
 const sourceImageCache = new Map();
 
@@ -463,6 +479,9 @@ async function readIndex(jobId) {
   const key = indexKey(jobId);
   const response = await s3.send(new GetObjectCommand({ Bucket: DATA_BUCKET, Key: key }));
   const index = JSON.parse(await streamToString(response.Body));
+  if (index.version !== INDEX_VERSION) {
+    throw new Error(`Cached review index is version ${index.version || "unknown"}; expected ${INDEX_VERSION}.`);
+  }
   index.byId = Object.fromEntries(index.detections.map((item) => [item.id, item]));
   return index;
 }
@@ -483,7 +502,7 @@ async function buildIndex(jobId) {
       detail: `s3://${DATA_BUCKET}/${resultKey}`
     });
   }
-  const detections = [];
+  const parsedRows = [];
   const lines = readline.createInterface({
     input: response.Body,
     crlfDelay: Infinity
@@ -496,12 +515,15 @@ async function buildIndex(jobId) {
     if (!parsed) {
       continue;
     }
-    detections.push(recordDetection(jobId, parsed));
+    parsedRows.push(parsed);
   }
-  const summary = buildSummary(detections);
+  const jobType = detectJobType(parsedRows);
+  const detections = parsedRows.map((parsed) => recordDetection(jobId, parsed, jobType));
+  const summary = buildSummary(detections, jobType);
   const index = {
-    version: 1,
+    version: INDEX_VERSION,
     job_id: jobId,
+    job_type: jobType,
     generated_at: new Date().toISOString(),
     detections,
     summary
@@ -522,8 +544,8 @@ async function buildIndex(jobId) {
   return index;
 }
 
-function recordDetection(jobId, parsed) {
-  const category = categoryForLabel(parsed.raw_label, Boolean(parsed.predicted_subcategory));
+function recordDetection(jobId, parsed, jobType) {
+  const category = categoryForLabel(parsed.raw_label, Boolean(parsed.predicted_subcategory), jobType);
   const [subcategoryFilter] = subcategoryFilterFor(category.override, parsed.predicted_subcategory);
   const source = parseS3Url(parsed.source_path);
   const detectionId = parsed.detection_id;
@@ -531,6 +553,7 @@ function recordDetection(jobId, parsed) {
     id: `${jobId}/${detectionId}`,
     detection_id: detectionId,
     job_id: jobId,
+    job_type: jobType,
     site: source.site || jobId,
     source_bucket: source.bucket || DATA_BUCKET,
     source_key: source.key || parsed.source_path.replace(/^\/+/, ""),
@@ -556,17 +579,19 @@ function filterDetections(index, query) {
   return items;
 }
 
-function buildSummary(detections) {
+function buildSummary(detections, jobType = detections[0]?.job_type || "custom") {
   const categoryCounts = {};
   const subcategoryCounts = {};
   const rawLabelCounts = {};
   const dynamicCategories = {};
+  const configuredCategories = categoriesForJobType(jobType);
+  const configuredCategoryIds = new Set(configuredCategories.map((category) => String(category.id)));
   for (const detection of detections) {
     const hydrated = hydrateDetection(detection);
     const categoryId = String(hydrated.predicted_category_id);
     categoryCounts[categoryId] = (categoryCounts[categoryId] || 0) + 1;
     rawLabelCounts[hydrated.raw_label] = (rawLabelCounts[hydrated.raw_label] || 0) + 1;
-    if (!categoriesById.has(categoryId)) {
+    if (!configuredCategoryIds.has(categoryId)) {
       dynamicCategories[categoryId] = dynamicCategories[categoryId] || {
         id: hydrated.predicted_category_id,
         key: hydrated.predicted_category_key,
@@ -579,17 +604,19 @@ function buildSummary(detections) {
         dynamicCategories[categoryId].requires_subcategory ||
         Boolean(hydrated.predicted_category_requires_subcategory);
     }
-    const filters = subcategoryCounts[categoryId] || {};
-    subcategoryCounts[categoryId] = filters;
-    const filterValue = hydrated.predicted_subcategory_filter;
-    filters[filterValue] = filters[filterValue] || {
-      value: filterValue,
-      label: hydrated.predicted_subcategory_label,
-      count: 0
-    };
-    filters[filterValue].count += 1;
+    if (hydrated.predicted_category_requires_subcategory !== false || hydrated.predicted_subcategory_filter !== NO_SUBCATEGORY) {
+      const filters = subcategoryCounts[categoryId] || {};
+      subcategoryCounts[categoryId] = filters;
+      const filterValue = hydrated.predicted_subcategory_filter;
+      filters[filterValue] = filters[filterValue] || {
+        value: filterValue,
+        label: hydrated.predicted_subcategory_label,
+        count: 0
+      };
+      filters[filterValue].count += 1;
+    }
   }
-  const categories = [...(config.categories || []), ...Object.values(dynamicCategories)].map((category) => ({
+  const categories = [...configuredCategories, ...Object.values(dynamicCategories)].map((category) => ({
     ...category,
     count: categoryCounts[String(category.id)] || 0
   }));
@@ -598,6 +625,9 @@ function buildSummary(detections) {
     subcategoryFilters[categoryId] = Object.values(filters).sort((a, b) => a.label.localeCompare(b.label));
   }
   return {
+    index_version: INDEX_VERSION,
+    job_type: jobType,
+    job_type_label: jobTypeLabel(jobType),
     total: detections.length,
     missing_crop_count: 0,
     categories,
@@ -1101,6 +1131,124 @@ function labelForSubcategoryFilter(filterValue, predictedSubcategory) {
   return predictedSubcategory ? sentenceCase(predictedSubcategory.replace(/_/g, " ")) : "No predicted subcategory";
 }
 
+function normalizeCategorySets(rawConfig) {
+  const sets = {};
+  for (const [key, set] of Object.entries(rawConfig.category_sets || {})) {
+    sets[key] = {
+      id: set.id || key,
+      label: set.label || humanizeLabel(key),
+      categories: (set.categories || []).filter((item) => !item.is_false_detection).map(normalizeCategory)
+    };
+  }
+  if (!sets.birds && Array.isArray(rawConfig.categories)) {
+    sets.birds = {
+      id: "birds",
+      label: "Bird detections",
+      categories: rawConfig.categories.filter((item) => !item.is_false_detection).map(normalizeCategory)
+    };
+  }
+  return sets;
+}
+
+function normalizeCategory(category) {
+  const key = String(category.key ?? category.id);
+  return {
+    ...category,
+    id: category.id ?? key,
+    key,
+    label: category.label || humanizeLabel(key),
+    shortcut: category.shortcut || "",
+    requires_subcategory: category.requires_subcategory !== false
+  };
+}
+
+function configuredCategoriesList(sets, falseCategory) {
+  const seen = new Set();
+  const categories = [];
+  for (const set of Object.values(sets)) {
+    for (const category of set.categories || []) {
+      const id = String(category.id);
+      if (!seen.has(id)) {
+        seen.add(id);
+        categories.push(category);
+      }
+    }
+  }
+  const falseId = String(falseCategory.id);
+  if (!seen.has(falseId)) {
+    categories.push(falseCategory);
+  }
+  return categories;
+}
+
+function categoriesForJobType(jobType) {
+  const set = configuredCategorySets[jobType];
+  const categories = set ? set.categories : [];
+  return [...categories, falseDetectionCategory];
+}
+
+function categoryLookupForJobType(jobType) {
+  const key = jobType || "custom";
+  if (!categoryLookupCache.has(key)) {
+    const categories = categoriesForJobType(key);
+    categoryLookupCache.set(key, {
+      byKey: new Map(categories.map((category) => [category.key, category])),
+      byId: new Map(categories.map((category) => [String(category.id), category]))
+    });
+  }
+  return categoryLookupCache.get(key);
+}
+
+function categoryKeysForJobType(jobType) {
+  return new Set(categoriesForJobType(jobType)
+    .filter((category) => !category.is_false_detection)
+    .map((category) => category.key));
+}
+
+function categoryIdsForJobType(jobType) {
+  return new Set(categoriesForJobType(jobType)
+    .filter((category) => !category.is_false_detection)
+    .map((category) => String(category.id)));
+}
+
+function detectJobType(parsedRows) {
+  const birdKeys = categoryKeysForJobType("birds");
+  const birdIds = categoryIdsForJobType("birds");
+  const rubbishKeys = categoryKeysForJobType("rubbish");
+  let birdMatches = 0;
+  let rubbishMatches = 0;
+  let hasPredictedSubcategory = false;
+  for (const row of parsedRows) {
+    if (row.predicted_subcategory) {
+      hasPredictedSubcategory = true;
+    }
+    if (birdKeys.has(row.raw_label)) {
+      birdMatches += 1;
+    }
+    if (rubbishKeys.has(row.raw_label)) {
+      rubbishMatches += 1;
+    }
+    const override = sourceLabelOverrides[row.raw_label];
+    if (override?.category_id !== undefined && birdIds.has(String(override.category_id))) {
+      birdMatches += 1;
+    }
+  }
+  if (hasPredictedSubcategory || birdMatches > 0) {
+    return "birds";
+  }
+  if (rubbishMatches > 0) {
+    return "rubbish";
+  }
+  return "custom";
+}
+
+function jobTypeLabel(jobType) {
+  if (!jobType || jobType === "custom") {
+    return "Custom detections";
+  }
+  return configuredCategorySets[jobType]?.label || humanizeLabel(jobType);
+}
+
 function presignedS3GetUrl(bucket, key, expiresSeconds) {
   const accessKeyId = process.env.AWS_ACCESS_KEY_ID;
   const secretAccessKey = process.env.AWS_SECRET_ACCESS_KEY;
@@ -1196,7 +1344,7 @@ function parseDetectionLine(line) {
   };
 }
 
-function categoryForLabel(rawLabel, hasPredictedSubcategory) {
+function categoryForLabel(rawLabel, hasPredictedSubcategory, jobType = "custom") {
   const override = sourceLabelOverrides[rawLabel] || {};
   if (override.category_id !== undefined) {
     const category = categoriesById.get(String(override.category_id));
@@ -1204,7 +1352,7 @@ function categoryForLabel(rawLabel, hasPredictedSubcategory) {
       return { item: category, override };
     }
   }
-  const configured = categoriesByKey.get(rawLabel);
+  const configured = categoryLookupForJobType(jobType).byKey.get(rawLabel) || categoriesByKey.get(rawLabel);
   if (configured) {
     return { item: configured, override: {} };
   }

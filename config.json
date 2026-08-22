@@ -2,6 +2,145 @@
   "project_name": "Prediction Review",
   "progress_file": "review_progress.json",
   "image_extensions": [".jpg", ".jpeg", ".png", ".webp"],
+  "category_sets": {
+    "birds": {
+      "label": "Bird detections",
+      "categories": [
+        {
+          "id": 1,
+          "key": "birds_boobies",
+          "label": "Boobies",
+          "shortcut": "1",
+          "requires_subcategory": true
+        },
+        {
+          "id": 2,
+          "key": "birds_frigatebird",
+          "label": "Frigatebirds",
+          "shortcut": "2",
+          "requires_subcategory": true
+        },
+        {
+          "id": 3,
+          "key": "bird_ambiguous",
+          "label": "Ambiguous birds and gulls",
+          "shortcut": "3",
+          "requires_subcategory": true
+        },
+        {
+          "id": 4,
+          "key": "birds_terns",
+          "label": "Terns and noddies",
+          "shortcut": "4",
+          "requires_subcategory": true
+        },
+        {
+          "id": 5,
+          "key": "birds_shearwaters",
+          "label": "Shearwaters and petrels",
+          "shortcut": "5",
+          "requires_subcategory": true
+        },
+        {
+          "id": 6,
+          "key": "birds_tropicbird",
+          "label": "Tropicbirds",
+          "shortcut": "6",
+          "requires_subcategory": true
+        },
+        {
+          "id": 7,
+          "key": "birds_waders",
+          "label": "Waders",
+          "shortcut": "7",
+          "requires_subcategory": true
+        }
+      ]
+    },
+    "rubbish": {
+      "label": "Rubbish detections",
+      "categories": [
+        {
+          "id": "general",
+          "key": "general",
+          "label": "General",
+          "shortcut": "1",
+          "requires_subcategory": false
+        },
+        {
+          "id": "plastic_bottles",
+          "key": "plastic_bottles",
+          "label": "Plastic bottles",
+          "shortcut": "2",
+          "requires_subcategory": false
+        },
+        {
+          "id": "shoes",
+          "key": "shoes",
+          "label": "Shoes",
+          "shortcut": "3",
+          "requires_subcategory": false
+        },
+        {
+          "id": "fishing_and_marine",
+          "key": "fishing_and_marine",
+          "label": "Fishing and marine",
+          "shortcut": "4",
+          "requires_subcategory": false
+        },
+        {
+          "id": "containers_and_boxes",
+          "key": "containers_and_boxes",
+          "label": "Containers and boxes",
+          "shortcut": "5",
+          "requires_subcategory": false
+        },
+        {
+          "id": "pallets",
+          "key": "pallets",
+          "label": "Pallets",
+          "shortcut": "6",
+          "requires_subcategory": false
+        },
+        {
+          "id": "metal",
+          "key": "metal",
+          "label": "Metal",
+          "shortcut": "7",
+          "requires_subcategory": false
+        },
+        {
+          "id": "boats_surfcraft",
+          "key": "boats_surfcraft",
+          "label": "Boats and surfcraft",
+          "shortcut": "8",
+          "requires_subcategory": false
+        },
+        {
+          "id": "investigate_further",
+          "key": "investigate_further",
+          "label": "Investigate further",
+          "shortcut": "9",
+          "requires_subcategory": false
+        },
+        {
+          "id": "aircraft",
+          "key": "aircraft",
+          "label": "Aircraft",
+          "shortcut": "0",
+          "requires_subcategory": false
+        }
+      ]
+    }
+  },
+  "false_detection_category": {
+    "id": 0,
+    "key": "nothing",
+    "label": "Nothing / false detection",
+    "shortcut": "N",
+    "requires_subcategory": false,
+    "is_false_detection": true
+  },
   "categories": [
     {
       "id": 1,

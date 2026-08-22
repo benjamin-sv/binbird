@@ -375,8 +375,9 @@ function renderSubcategoryFilter() {
   els.subcategoryFilter.innerHTML = "";
   const allOption = document.createElement("option");
   allOption.value = "";
-  allOption.textContent = "All predicted subcategories";
+  allOption.textContent = filters.length ? "All predicted subcategories" : "No subcategories";
   els.subcategoryFilter.appendChild(allOption);
+  els.subcategoryFilter.disabled = !filters.length;
   filters.forEach((item) => {
     const option = document.createElement("option");
     option.value = item.value;

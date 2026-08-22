@@ -114,6 +114,39 @@ POST /api/progress/undo
 POST /api/crops/start
 ```
 
+## Job Types
+
+The review API detects the job type from `detection_results.txt` while building the cached review index.
+
+Bird jobs have bird class labels and usually include the predicted subcategory column:
+
+```text
+birds_boobies
+birds_frigatebird
+bird_ambiguous
+birds_terns
+birds_shearwaters
+birds_tropicbird
+birds_waders
+```
+
+Rubbish jobs use the rubbish category set and do not require subcategory selection:
+
+```text
+general
+plastic_bottles
+shoes
+fishing_and_marine
+containers_and_boxes
+pallets
+metal
+boats_surfcraft
+investigate_further
+aircraft
+```
+
+The cached review index has a version number. When parser/category semantics change, bumping that version causes the API to rebuild `review/index.json` and `review/summary.json` on the next job load without touching existing generated crop files.
+
 Errors are returned as JSON:
 
 ```json
